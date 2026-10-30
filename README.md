@@ -12,7 +12,7 @@
 
 | 원본 | 결과 |
 | --- | --- |
-| ![원본](docs/example.jpg) | ![결과](docs/example_nukki.png) |
+| ![원본](docs/example.jpg) | ![결과](docs/example_nobg.png) |
 
 ## 실행하기
 

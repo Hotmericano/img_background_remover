@@ -1,4 +1,4 @@
-<title>누끼 커터</title>
+<title>이미지 백그라운드 제거</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap">
@@ -30,7 +30,7 @@
 body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.55}
 .wrap{max-width:1080px;margin:0 auto;padding-block:28px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:22px}
 header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px}
-h1{font-family:var(--f-display);font-weight:400;font-size:clamp(34px,6vw,52px);line-height:1;margin:0;letter-spacing:.01em;text-wrap:balance}
+h1{word-break:keep-all;font-family:var(--f-display);font-weight:400;font-size:clamp(34px,6vw,52px);line-height:1;margin:0;letter-spacing:.01em;text-wrap:balance}
 h1 .scissor{display:inline-block;color:var(--mat);transform:translateY(-2px)}
 .lede{margin:8px 0 0;color:var(--muted);max-width:52ch}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px;background:var(--surface);gap:2px}
@@ -131,7 +131,7 @@ details.how code{font-family:var(--f-mono);font-size:12.5px;background:var(--sur
 <div class="wrap">
   <header>
     <div>
-      <h1><span class="scissor" aria-hidden="true">✂</span> 누끼 커터</h1>
+      <h1><span class="scissor" aria-hidden="true">✂</span> 이미지 백그라운드 제거</h1>
       <p class="lede">사진을 올리면 배경을 지우고 투명 PNG로 돌려줘요. 여러 장을 한꺼번에 넣어도 됩니다. 이미지는 서버로 가지 않고 이 브라우저 안에서만 처리돼요.</p>
     </div>
     <div class="controls">
@@ -276,7 +276,7 @@ function buildModel(tf, spec, buf) {
   let downloads = null;
 
   let savedPick = false;
-  try { const m = localStorage.getItem('nukki-model'); if (m === 'u2netp' || m === 'silueta') { modelName = m; savedPick = true; } } catch (e) {}
+  try { const m = localStorage.getItem('bg-remover-model') || localStorage.getItem('nukki-model'); if (m === 'u2netp' || m === 'silueta') { modelName = m; savedPick = true; } } catch (e) {}
   if (isMobile && !savedPick) { modelName = 'u2netp'; $('#devnote').hidden = false; }
   syncSeg();
 
@@ -289,7 +289,7 @@ function buildModel(tf, spec, buf) {
   }
   document.querySelectorAll('[data-model]').forEach(b => b.addEventListener('click', () => {
     modelName = b.dataset.model; syncSeg();
-    try { localStorage.setItem('nukki-model', modelName); } catch (e) {}
+    try { localStorage.setItem('bg-remover-model', modelName); } catch (e) {}
   }));
   document.querySelectorAll('[data-bg]').forEach(b => b.addEventListener('click', () => { bgMode = b.dataset.bg; syncSeg(); }));
     document.querySelectorAll('[data-crop]').forEach(b => b.addEventListener('click', () => {
@@ -339,7 +339,7 @@ function buildModel(tf, spec, buf) {
   function makeCard(it, origUrl, example) {
     const root = document.createElement('article'); root.className = 'card';
     const stage = document.createElement('div'); stage.className = 'stage' + (bgMode === 'white' ? ' white' : '');
-    const out = document.createElement('img'); out.alt = it.name + ' 누끼 결과'; out.hidden = true;
+    const out = document.createElement('img'); out.alt = it.name + ' 배경 제거 결과'; out.hidden = true;
     const orig = document.createElement('img'); orig.className = 'orig'; orig.alt = '원본'; orig.src = origUrl;
     const busy = document.createElement('div'); busy.className = 'busy'; busy.textContent = '대기 중';
     stage.append(out, orig, busy);
@@ -584,7 +584,7 @@ function buildModel(tf, spec, buf) {
   }
   async function saveOne(it) {
     if (!downloads || !it.result) return;
-    try { await downloads.save({ filename: baseName(it.name) + '_nukki.png', data: await whiteBg(it) }); toast('저장했어요'); }
+    try { await downloads.save({ filename: baseName(it.name) + '_nobg.png', data: await whiteBg(it) }); toast('저장했어요'); }
     catch (e) { handleSaveErr(e); }
   }
   $('#saveAll').addEventListener('click', async () => {
@@ -593,11 +593,11 @@ function buildModel(tf, spec, buf) {
     try {
       const zip = new JSZip(); const used = new Set();
       for (const it of done) {
-        let n = baseName(it.name) + '_nukki', k = 2; while (used.has(n)) n = baseName(it.name) + '_nukki_' + (k++); used.add(n);
+        let n = baseName(it.name) + '_nobg', k = 2; while (used.has(n)) n = baseName(it.name) + '_nobg_' + (k++); used.add(n);
         zip.file(n + '.png', await whiteBg(it));
       }
       const blob = await zip.generateAsync({ type: 'blob' });
-      await downloads.save({ filename: 'nukki_' + done.length + '.zip', data: blob });
+      await downloads.save({ filename: 'nobg_' + done.length + '.zip', data: blob });
       toast('ZIP으로 저장했어요');
     } catch (e) { handleSaveErr(e); }
   });

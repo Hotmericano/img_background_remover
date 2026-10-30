@@ -82,7 +82,7 @@ if __name__=='__main__':
     # 사용법: python3 convert.py <모델.onnx> <출력폴더> <이름>
     #   예) python3 convert.py u2netp.onnx ../models u2netp
     import argparse
-    ap=argparse.ArgumentParser(description='rembg U2-Net ONNX 모델을 누끼 커터용 JSON + 가중치 파일로 변환')
+    ap=argparse.ArgumentParser(description='rembg U2-Net ONNX 모델을 이미지 백그라운드 제거 앱용 JSON + 가중치 파일로 변환')
     ap.add_argument('onnx'); ap.add_argument('outdir'); ap.add_argument('name')
     a=ap.parse_args()
     nodes,inits,_,_=o.load(a.onnx)
