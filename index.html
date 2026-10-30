@@ -145,6 +145,11 @@ details.how code{font-family:var(--f-mono);font-size:12.5px;background:var(--sur
         <button id="bg-clear" data-bg="clear" aria-pressed="true">투명</button>
         <button id="bg-white" data-bg="white" aria-pressed="false">흰색</button>
       </div>
+      <span class="lbl">여백</span>
+      <div class="seg" role="group" aria-label="여백 자르기">
+        <button id="crop-on" data-crop="on" aria-pressed="true">자르기</button>
+        <button id="crop-off" data-crop="off" aria-pressed="false">원본 크기</button>
+      </div>
       <p class="devnote" id="devnote" hidden>휴대폰이라 메모리를 적게 쓰는 빠름 모델로 시작했어요. 정밀 모델도 쓸 수 있지만 기기에 따라 멈출 수 있어요.</p>
     </div>
   </header>
@@ -264,7 +269,7 @@ function buildModel(tf, spec, buf) {
   const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
   const $ = s => document.querySelector(s);
   const grid = $('#grid'), statusEl = $('#status'), drop = $('#drop'), fileIn = $('#file');
-  let modelName = 'silueta', bgMode = 'clear';
+  let modelName = 'silueta', bgMode = 'clear', cropOn = true;
   const models = {};            // name -> Promise<{run,dispose}>
   const items = [];             // {id, name, blob, url, card, ...}
   const queue = []; let working = false; let nextId = 1;
@@ -280,12 +285,17 @@ function buildModel(tf, spec, buf) {
     document.querySelectorAll('[data-model]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.model === modelName)));
     document.querySelectorAll('[data-bg]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.bg === bgMode)));
     document.querySelectorAll('.stage').forEach(s => s.classList.toggle('white', bgMode === 'white'));
+        document.querySelectorAll('[data-crop]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.crop === 'on') === cropOn)));
   }
   document.querySelectorAll('[data-model]').forEach(b => b.addEventListener('click', () => {
     modelName = b.dataset.model; syncSeg();
     try { localStorage.setItem('nukki-model', modelName); } catch (e) {}
   }));
   document.querySelectorAll('[data-bg]').forEach(b => b.addEventListener('click', () => { bgMode = b.dataset.bg; syncSeg(); }));
+    document.querySelectorAll('[data-crop]').forEach(b => b.addEventListener('click', () => {
+    cropOn = b.dataset.crop === 'on'; syncSeg();
+    items.forEach(showResult);
+  }));
   function setStatus(text, frac) {
     statusEl.textContent = text;
     if (frac != null) {
@@ -494,13 +504,53 @@ function buildModel(tf, spec, buf) {
     og.drawImage(mc, 0, 0, W, H);
     bmp.close && bmp.close();
     mc.width = mc.height = 0; c320.width = c320.height = 0;
-    const blob = await new Promise((res, rej) => oc.toBlob(b => b ? res(b) : rej(new Error('PNG로 저장하지 못했어요')), 'image/png'));
-    const ms = Math.round(performance.now() - t0);
-    it.result = blob; it.resultUrl = URL.createObjectURL(blob); it.w = W; it.h = H;
-    it.card.out.src = it.resultUrl; it.card.out.hidden = false; it.card.busy.remove();
-    it.card.meta.textContent = `${W}×${H} · ${fmtKB(blob.size)} · ${ms}ms`;
+        // 5) 원본 크기 결과와 여백을 자른 결과를 둘 다 만들어 둠
+    const toPng = c => new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('PNG로 저장하지 못했어요')), 'image/png'));
+    const full = { blob: await toPng(oc), w: W, h: H };
+    let cropped = full;
+    const box = findBounds(oc);
+    if (box && (box.w < W || box.h < H)) {
+      const cc = document.createElement('canvas'); cc.width = box.w; cc.height = box.h;
+      cc.getContext('2d').drawImage(oc, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+      cropped = { blob: await toPng(cc), w: box.w, h: box.h };
+      cc.width = cc.height = 0;
+    }
+    oc.width = oc.height = 0;
+    it.ms = Math.round(performance.now() - t0);
+    it.full = full; it.cropped = cropped;
+    showResult(it);
+    it.card.out.hidden = false; it.card.busy.remove();
     it.card.save.disabled = !downloads;
     updateSaveAll();
+  }
+
+  // 알파 값이 기준값보다 큰 픽셀을 모두 감싸는 가장 작은 사각형(바운딩 박스) 찾기
+  function findBounds(canvas, threshold = 10) {
+    const W = canvas.width, H = canvas.height;
+    const d = canvas.getContext('2d').getImageData(0, 0, W, H).data;
+    let top = H, bottom = -1, left = W, right = -1;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (d[(y * W + x) * 4 + 3] > threshold) {   // RGBA 중 4번째(인덱스 3)가 알파
+          if (y < top) top = y;
+          if (y > bottom) bottom = y;
+          if (x < left) left = x;
+          if (x > right) right = x;
+        }
+      }
+    }
+    if (bottom < 0) return null;   // 물체를 하나도 못 찾음 → 자르지 않음
+    return { x: left, y: top, w: right - left + 1, h: bottom - top + 1 };
+  }
+
+  // 여백 설정에 맞는 결과를 미리보기와 저장에 쓰도록 바꾸기
+  function showResult(it) {
+    if (!it.full) return;   // 아직 처리 중이거나 실패한 사진
+    const r = cropOn ? it.cropped : it.full;
+    if (it.resultUrl) URL.revokeObjectURL(it.resultUrl);
+    it.result = r.blob; it.resultUrl = URL.createObjectURL(r.blob); it.w = r.w; it.h = r.h;
+    it.card.out.src = it.resultUrl;
+    it.card.meta.textContent = `${r.w}×${r.h} · ${fmtKB(r.blob.size)} · ${it.ms}ms`;
   }
 
   // createImageBitmap이 못 여는 형식(아이폰 HEIC 등)은 <img>로 디코딩해서 다시 시도
