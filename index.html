@@ -86,7 +86,7 @@ h1 .scissor{display:inline-block;color:var(--mat);transform:translateY(-2px)}
 .stage .orig{position:absolute;left:8px;bottom:8px;width:30%;max-width:96px;aspect-ratio:4/3;border-radius:6px;border:2px solid var(--surface);box-shadow:0 2px 8px rgba(0,0,0,.18);object-fit:cover;background:var(--surface)}
 .stage .busy{position:absolute;inset:0;display:grid;place-items:center;background:color-mix(in srgb,var(--surface) 70%,transparent);font:12px var(--f-mono);color:var(--muted)}
 .stage .busy::before{content:"";width:28px;height:28px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--mat);animation:spin .8s linear infinite;margin-bottom:6px}
-.stage .busy{grid-template-rows:auto auto;align-content:center;justify-items:center}
+.stage .busy{grid-template-rows:auto auto auto;align-content:center;justify-items:center}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.stage .busy::before{animation:none}}
 .info{padding:10px 12px;display:flex;gap:8px;align-items:center;justify-content:space-between;border-top:1px solid var(--line);min-width:0}
@@ -152,6 +152,13 @@ details.how code{font-family:var(--f-mono);font-size:12.5px;background:var(--sur
   .info .name{flex:none}
   .info .acts{flex-wrap:wrap}.info .acts .btn{padding-inline:8px;white-space:nowrap}.info .acts .rg-open{flex-basis:100%}
 }
+/* ---------- 단계 진행 막대 ---------- */
+.pbar{width:100%;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.pbar i{display:block;height:100%;width:0;background:var(--mat);transition:width .25s ease-out}
+.stage .busy .pbar{width:60%;max-width:160px;margin-top:8px}
+.rg-prog{flex-basis:100%;display:grid;gap:6px}
+.rg-prog span{font:12px var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+@media (prefers-reduced-motion:reduce){.pbar i{transition:none}}
 </style>
 
 <div class="wrap">
@@ -216,6 +223,10 @@ details.how code{font-family:var(--f-mono);font-size:12.5px;background:var(--sur
       <div class="rg-wrap" id="rgWrap"><img id="rgImg" alt="원본 사진"></div>
     </div>
     <div class="rg-bar">
+      <div class="rg-prog" id="rgProg" hidden>
+        <div class="pbar"><i id="rgProgFill"></i></div>
+        <span id="rgProgText"></span>
+      </div>
       <span class="rg-count" id="rgCount">사각형 0개</span>
       <div class="rg-btns">
         <button class="btn" id="rgClear" type="button">모두 지우기</button>
@@ -386,7 +397,12 @@ function buildModel(tf, spec, buf) {
     const stage = document.createElement('div'); stage.className = 'stage' + (bgMode === 'white' ? ' white' : '');
     const out = document.createElement('img'); out.alt = it.name + ' 배경 제거 결과'; out.hidden = true;
     const orig = document.createElement('img'); orig.className = 'orig'; orig.alt = '원본'; orig.src = origUrl;
-    const busy = document.createElement('div'); busy.className = 'busy'; busy.textContent = '대기 중';
+    const busy = document.createElement('div'); busy.className = 'busy';
+    const busyText = document.createElement('span'); busyText.textContent = '대기 중';
+    const busyBar = document.createElement('div'); busyBar.className = 'pbar';
+    const busyFill = document.createElement('i'); busyBar.append(busyFill);
+    busyBar.hidden = true;   // 차례를 기다리는 동안에는 막대 숨김
+    busy.append(busyText, busyBar);
     stage.append(out, orig, busy);
     const info = document.createElement('div'); info.className = 'info';
     const nm = document.createElement('div'); nm.className = 'name';
@@ -403,7 +419,7 @@ function buildModel(tf, spec, buf) {
     acts.append(del);
     info.append(nm, acts);
     root.append(stage, info);
-    return { root, stage, out, orig, busy, meta, save, acts };
+    return { root, stage, out, orig, busy, busyText, busyBar, busyFill, meta, save, acts };
   }
 
   function removeItem(it) {
@@ -479,11 +495,12 @@ function buildModel(tf, spec, buf) {
       const it = queue.shift();
       const left = queue.length;
       try {
-        it.card.busy.textContent = '준비 중';
+        it.card.busyBar.hidden = false;
+        const step = makeSteps(it.card.busyFill, it.card.busyText, ['모델 준비', '사진 읽기', '오리는 중', 'PNG 만들기']);
+        await step(0);
         const m = await getModel(it.model);
         setStatus(`오리는 중… (남은 사진 ${left}장)` + (m.backend === 'cpu' ? ' · GPU를 못 써서 느려요' : ''));
-        it.card.busy.textContent = '오리는 중';
-        await process(it, m);
+        await process(it, m, step);
         await new Promise(r => setTimeout(r, 0));   // 사진 사이에 화면이 멈추지 않도록 한 번 숨 고르기
       } catch (e) {
         const msg0 = (e && e.message) || String(e);
@@ -498,10 +515,10 @@ function buildModel(tf, spec, buf) {
           continue;
         }
         console.error(e);
-        it.card.busy.textContent = '';
         const msg = (e && e.message) || String(e);
         const hint = it.model === 'silueta' && /memory|texture|context|WebGL/i.test(msg) ? ' · 빠름 모델로 바꿔 보세요' : '';
-        it.card.busy.textContent = '실패: ' + msg.slice(0, 80) + hint;
+        it.card.busyBar.hidden = true;
+        it.card.busyText.textContent = '실패: ' + msg.slice(0, 80) + hint;
         it.card.meta.innerHTML = '<span class="chip err">오류</span>';
       }
     }
@@ -511,11 +528,14 @@ function buildModel(tf, spec, buf) {
     updateSaveAll();
   }
 
-  async function process(it, m) {
+  async function process(it, m, step = async () => {}) {
     const t0 = performance.now();
+    await step(1);
     const bmp = await decodeImage(it.file);
     const { W, H } = fitSize(bmp);
+    await step(2);
     const mask = await predictMask(m, bmp, 0, 0, bmp.width, bmp.height);
+    await step(3);
     await composeResult(it, bmp, mask, W, H);
     bmp.close && bmp.close(); mask.width = mask.height = 0;
     it.ms = Math.round(performance.now() - t0);
@@ -525,6 +545,27 @@ function buildModel(tf, spec, buf) {
     it.card.save.disabled = !downloads;
     addRegionButton(it);
     updateSaveAll();
+  }
+
+  // 화면이 한 번 다시 그려질 때까지 기다리기
+  // 자바스크립트가 쉬지 않고 일하면 브라우저는 화면을 갱신하지 못해요. 진행 막대를 바꾼 뒤 이걸 기다려야 바뀐 막대가 보여요.
+  // (탭이 백그라운드라 requestAnimationFrame이 멈춰도 50ms 뒤에는 넘어가도록 setTimeout을 같이 걸어 둠)
+  function nextFrame() {
+    return new Promise(resolve => {
+      let done = false; const go = () => { if (!done) { done = true; resolve(); } };
+      requestAnimationFrame(() => setTimeout(go, 0));
+      setTimeout(go, 50);
+    });
+  }
+
+  // 단계 기준 진행 막대 만들기
+  // labels: 단계 이름 배열. 돌려받은 step(i)를 부르면 "i번째 단계 시작"으로 막대와 글자를 바꿔요.
+  function makeSteps(fill, text, labels) {
+    return async i => {
+      fill.style.width = Math.round(i / labels.length * 100) + '%';
+      text.textContent = `${i + 1}/${labels.length} · ${labels[i]}`;
+      await nextFrame();
+    };
   }
 
   // 결과 이미지 크기 정하기 (휴대폰은 메모리 한도 때문에 더 작게)
@@ -565,12 +606,13 @@ function buildModel(tf, spec, buf) {
 
   // 사각형마다 모델을 따로 돌려서, W×H 크기의 마스크 하나로 합치기
   // boxes: 원본 이미지 좌표 {x, y, w, h}. 사각형 밖은 투명(배경), 겹치면 큰 값
-  async function regionMask(m, bmp, boxes, W, H) {
+  async function regionMask(m, bmp, boxes, W, H, onBox = async () => {}) {
     const out = document.createElement('canvas'); out.width = W; out.height = H;
     const og = out.getContext('2d');
     const all = og.createImageData(W, H);   // 처음엔 전부 0 = 전부 배경
     const kx = W / bmp.width, ky = H / bmp.height;   // 원본 좌표 → 결과 좌표 배율
-    for (const b of boxes) {
+    for (const [n, b] of boxes.entries()) {
+      await onBox(n);   // 진행 막대: "사각형 n+1/전체" 단계 시작
       const mask = await predictMask(m, bmp, b.x, b.y, b.w, b.h);
       const dx = Math.floor(b.x * kx), dy = Math.floor(b.y * ky);
       const dw = Math.max(1, Math.min(W - dx, Math.round(b.w * kx)));
@@ -738,14 +780,20 @@ function buildModel(tf, spec, buf) {
     const it = editing; if (!it || !boxes.length) return;
     const btns = rg.querySelectorAll('button'); btns.forEach(b => b.disabled = true);
     $('#rgApply').textContent = '오리는 중…';
+    const labels = ['모델 준비', '사진 읽기', ...boxes.map((_, n) => `사각형 ${n + 1}/${boxes.length}`), 'PNG 만들기'];
+    const step = makeSteps($('#rgProgFill'), $('#rgProgText'), labels);
+    $('#rgProg').hidden = false; $('#rgCount').hidden = true;
     try {
       const t0 = performance.now();
+      await step(0);
       const m = await getModel(it.model);
+      await step(1);
       const bmp = await decodeImage(it.file);
       const { W, H } = fitSize(bmp);
       // 0~1 비율 좌표 → 원본 이미지 픽셀 좌표
       const px = boxes.map(b => ({ x: b.x * bmp.width, y: b.y * bmp.height, w: b.w * bmp.width, h: b.h * bmp.height }));
-      const mask = await regionMask(m, bmp, px, W, H);
+      const mask = await regionMask(m, bmp, px, W, H, n => step(2 + n));
+      await step(labels.length - 1);
       await composeResult(it, bmp, mask, W, H);
       bmp.close && bmp.close(); mask.width = mask.height = 0;
       it.ms = Math.round(performance.now() - t0);
@@ -758,6 +806,7 @@ function buildModel(tf, spec, buf) {
     } finally {
       btns.forEach(b => b.disabled = false);
       $('#rgApply').textContent = '적용';
+      $('#rgProg').hidden = true; $('#rgCount').hidden = false;
       if (!rg.hidden) { renderBoxes(); $('#rgReset').disabled = !(editing && editing.boxes); }
     }
   });
