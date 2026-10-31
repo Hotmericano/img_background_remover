@@ -465,6 +465,14 @@ function buildModel(tf, spec, buf) {
       try { await tf.setBackend('webgl'); } catch (e) {}
       if (tf.getBackend() !== 'webgl') { await tf.setBackend('cpu'); }
       await tf.ready();
+      if (tf.getBackend() === 'webgl') {
+        // 휴대폰 GPU는 텍스처(GPU가 다루는 2차원 데이터) 한 장의 최대 크기가 작아요. 보통 4096×4096이에요.
+        // TensorFlow.js는 합성곱을 빠르게 하려고 입력을 큰 행렬로 펼친 뒤(im2col) 행렬 곱으로 계산하는데,
+        // 이 모델은 320×320 사진에서 그 행렬이 최대 10862×10862 텍스처만큼 커져서 한도를 넘어요.
+        // 그래서 한도가 작은 기기에서는 이 방식을 끄고 합성곱을 직접 계산해요. 조금 느리지만 한도 안에서 돌아가요.
+        const maxTex = tf.env().getNumber('WEBGL_MAX_TEXTURE_SIZE');
+        if (maxTex < 11000) tf.env().set('WEBGL_CONV_IM2COL', false);
+      }
       return tf.getBackend();
     })();
     return backendReady;
