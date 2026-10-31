@@ -1,3 +1,7 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>이미지 백그라운드 제거</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -126,6 +130,28 @@ details.how code{font-family:var(--f-mono);font-size:12.5px;background:var(--sur
   .stage .orig{width:34%}
 }
 @media (max-width:360px){.grid{grid-template-columns:1fr}}
+/* ---------- 영역 지정 화면 ---------- */
+[hidden]{display:none!important}
+.rg{position:fixed;inset:0;z-index:15;background:var(--bg);display:flex;flex-direction:column;gap:12px;
+  padding-top:calc(16px + env(safe-area-inset-top,0px));padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.rg-head h2{margin:0;font-size:18px;font-weight:600}
+.rg-hint{margin:4px 0 0;color:var(--muted);font-size:14px}
+.rg-body{flex:1;min-height:0;display:grid;place-items:center}
+.rg-wrap{position:relative;display:inline-block;max-width:100%;touch-action:none;cursor:crosshair;user-select:none;-webkit-user-select:none}
+.rg-wrap img{display:block;max-width:100%;max-height:calc(100vh - 210px);max-height:calc(100dvh - 210px);pointer-events:none;-webkit-user-drag:none;border-radius:6px}
+.rg-box{position:absolute;border:2px solid var(--accent);background:rgba(226,185,59,.18);box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+.rg-del{position:absolute;top:-13px;right:-13px;width:26px;height:26px;border-radius:50%;border:0;background:var(--ink);color:var(--bg);font:600 16px/1 var(--f-body);cursor:pointer;display:grid;place-items:center;padding:0}
+.info{flex-wrap:wrap}.info .name{flex:1 1 120px}
+.rg-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.rg-count{font:12px var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.rg-btns{display:flex;flex-wrap:wrap;gap:8px}
+@media (pointer:coarse){.rg-del{width:32px;height:32px;top:-16px;right:-16px}}
+@media (max-width:560px){
+  .rg-btns{width:100%}.rg-btns .btn{flex:1 1 40%;justify-content:center}
+  .info .name{flex:none}
+  .info .acts{flex-wrap:wrap}.info .acts .btn{padding-inline:8px;white-space:nowrap}.info .acts .rg-open{flex-basis:100%}
+}
 </style>
 
 <div class="wrap">
@@ -180,6 +206,25 @@ details.how code{font-family:var(--f-mono);font-size:12.5px;background:var(--sur
     </div>
     <div class="grid" id="grid" style="margin-top:14px"></div>
   </section>
+
+  <div class="rg" id="rg" hidden role="dialog" aria-modal="true" aria-labelledby="rgTitle">
+    <div class="rg-head">
+      <h2 id="rgTitle">영역 지정</h2>
+      <p class="rg-hint"><span class="only-mouse">남길 물체마다 드래그해서 사각형을 그려 주세요.</span><span class="only-touch">남길 물체마다 손가락으로 끌어서 사각형을 그려 주세요.</span> 사각형 밖은 모두 지워져요.</p>
+    </div>
+    <div class="rg-body">
+      <div class="rg-wrap" id="rgWrap"><img id="rgImg" alt="원본 사진"></div>
+    </div>
+    <div class="rg-bar">
+      <span class="rg-count" id="rgCount">사각형 0개</span>
+      <div class="rg-btns">
+        <button class="btn" id="rgClear" type="button">모두 지우기</button>
+        <button class="btn" id="rgReset" type="button">자동 결과로 되돌리기</button>
+        <button class="btn" id="rgCancel" type="button">취소</button>
+        <button class="btn primary" id="rgApply" type="button" disabled>적용</button>
+      </div>
+    </div>
+  </div>
 
   <p class="note" id="dlNote" hidden>이 화면에서는 저장 버튼을 쓸 수 없어요. 결과 이미지를 길게 누르거나 우클릭해서 저장하세요.</p>
 
@@ -469,14 +514,34 @@ function buildModel(tf, spec, buf) {
   async function process(it, m) {
     const t0 = performance.now();
     const bmp = await decodeImage(it.file);
-    let W = bmp.width, H = bmp.height;
-    const sc = Math.min(1, MAX_SIDE / Math.max(W, H), Math.sqrt(MAX_PIXELS / (W * H))); W = Math.round(W * sc); H = Math.round(H * sc);
+    const { W, H } = fitSize(bmp);
+    const mask = await predictMask(m, bmp, 0, 0, bmp.width, bmp.height);
+    await composeResult(it, bmp, mask, W, H);
+    bmp.close && bmp.close(); mask.width = mask.height = 0;
+    it.ms = Math.round(performance.now() - t0);
+    it.auto = { full: it.full, cropped: it.cropped, ms: it.ms };   // "자동 결과로 되돌리기"용
+    showResult(it);
+    it.card.out.hidden = false; it.card.busy.remove();
+    it.card.save.disabled = !downloads;
+    addRegionButton(it);
+    updateSaveAll();
+  }
 
+  // 결과 이미지 크기 정하기 (휴대폰은 메모리 한도 때문에 더 작게)
+  function fitSize(bmp) {
+    const sc = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height), Math.sqrt(MAX_PIXELS / (bmp.width * bmp.height)));
+    return { W: Math.round(bmp.width * sc), H: Math.round(bmp.height * sc) };
+  }
+
+  // 이미지의 (sx, sy, sw, sh) 부분을 모델에 넣어 320×320 마스크 캔버스를 얻기
+  // 사진 전체를 넣으면 자동 결과, 사각형 부분만 넣으면 영역 지정 결과가 됨
+  async function predictMask(m, src, sx, sy, sw, sh) {
     // 1) 320×320 입력 만들기
     const c320 = document.createElement('canvas'); c320.width = c320.height = SIZE;
     const g = c320.getContext('2d', { willReadFrequently: true });
-    g.imageSmoothingQuality = 'high'; g.drawImage(bmp, 0, 0, SIZE, SIZE);
+    g.imageSmoothingQuality = 'high'; g.drawImage(src, sx, sy, sw, sh, 0, 0, SIZE, SIZE);
     const px = g.getImageData(0, 0, SIZE, SIZE).data;
+    c320.width = c320.height = 0;
     let mx = 0; for (let i = 0; i < px.length; i += 4) { if (px[i] > mx) mx = px[i]; if (px[i + 1] > mx) mx = px[i + 1]; if (px[i + 2] > mx) mx = px[i + 2]; }
     mx = mx || 1;
     const inp = new Float32Array(SIZE * SIZE * 3);
@@ -487,24 +552,55 @@ function buildModel(tf, spec, buf) {
     const x = tf.tensor4d(inp, [1, SIZE, SIZE, 3]);
     const y = m.run(x); x.dispose();
     const pred = await y.data(); y.dispose();
-    // 3) 정규화 → 마스크 캔버스
+    // 3) 0~1로 늘려서 알파 마스크 캔버스로
     let lo = Infinity, hi = -Infinity; for (const v of pred) { if (v < lo) lo = v; if (v > hi) hi = v; }
     if (!isFinite(lo) || !isFinite(hi)) throw new Error('GPU 계산 결과가 올바르지 않아요 (WebGL 정밀도 문제). 다른 브라우저에서 시도해 보세요');
     const span = (hi - lo) || 1;
     const mc = document.createElement('canvas'); mc.width = mc.height = SIZE;
     const mg = mc.getContext('2d'); const mi = mg.createImageData(SIZE, SIZE);
-    for (let i = 0; i < pred.length; i++) { const a = Math.round((pred[i] - lo) / span * 255); mi.data[i * 4 + 3] = a; }
+    for (let i = 0; i < pred.length; i++) mi.data[i * 4 + 3] = Math.round((pred[i] - lo) / span * 255);
     mg.putImageData(mi, 0, 0);
-    // 4) 원본 크기에서 마스크를 알파로 합성 (destination-in)
+    return mc;
+  }
+
+  // 사각형마다 모델을 따로 돌려서, W×H 크기의 마스크 하나로 합치기
+  // boxes: 원본 이미지 좌표 {x, y, w, h}. 사각형 밖은 투명(배경), 겹치면 큰 값
+  async function regionMask(m, bmp, boxes, W, H) {
+    const out = document.createElement('canvas'); out.width = W; out.height = H;
+    const og = out.getContext('2d');
+    const all = og.createImageData(W, H);   // 처음엔 전부 0 = 전부 배경
+    const kx = W / bmp.width, ky = H / bmp.height;   // 원본 좌표 → 결과 좌표 배율
+    for (const b of boxes) {
+      const mask = await predictMask(m, bmp, b.x, b.y, b.w, b.h);
+      const dx = Math.floor(b.x * kx), dy = Math.floor(b.y * ky);
+      const dw = Math.max(1, Math.min(W - dx, Math.round(b.w * kx)));
+      const dh = Math.max(1, Math.min(H - dy, Math.round(b.h * ky)));
+      // 320×320 마스크를 사각형 크기로 늘리기
+      const t = document.createElement('canvas'); t.width = dw; t.height = dh;
+      const tg = t.getContext('2d'); tg.imageSmoothingQuality = 'high';
+      tg.drawImage(mask, 0, 0, dw, dh);
+      const part = tg.getImageData(0, 0, dw, dh).data;
+      for (let y = 0; y < dh; y++) {
+        for (let x = 0; x < dw; x++) {
+          const a = part[(y * dw + x) * 4 + 3];
+          const i = ((dy + y) * W + (dx + x)) * 4 + 3;
+          if (a > all.data[i]) all.data[i] = a;   // 픽셀마다 큰 값 고르기
+        }
+      }
+      mask.width = mask.height = 0; t.width = t.height = 0;
+    }
+    og.putImageData(all, 0, 0);
+    return out;
+  }
+
+  // 마스크를 알파로 합성하고, 원본 크기 결과와 여백을 자른 결과를 둘 다 만들어 두기
+  async function composeResult(it, bmp, mask, W, H) {
     const oc = document.createElement('canvas'); oc.width = W; oc.height = H;
     const og = oc.getContext('2d');
     og.imageSmoothingQuality = 'high';
     og.drawImage(bmp, 0, 0, W, H);
     og.globalCompositeOperation = 'destination-in';
-    og.drawImage(mc, 0, 0, W, H);
-    bmp.close && bmp.close();
-    mc.width = mc.height = 0; c320.width = c320.height = 0;
-        // 5) 원본 크기 결과와 여백을 자른 결과를 둘 다 만들어 둠
+    og.drawImage(mask, 0, 0, W, H);
     const toPng = c => new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('PNG로 저장하지 못했어요')), 'image/png'));
     const full = { blob: await toPng(oc), w: W, h: H };
     let cropped = full;
@@ -516,12 +612,7 @@ function buildModel(tf, spec, buf) {
       cc.width = cc.height = 0;
     }
     oc.width = oc.height = 0;
-    it.ms = Math.round(performance.now() - t0);
     it.full = full; it.cropped = cropped;
-    showResult(it);
-    it.card.out.hidden = false; it.card.busy.remove();
-    it.card.save.disabled = !downloads;
-    updateSaveAll();
   }
 
   // 알파 값이 기준값보다 큰 픽셀을 모두 감싸는 가장 작은 사각형(바운딩 박스) 찾기
@@ -550,8 +641,126 @@ function buildModel(tf, spec, buf) {
     if (it.resultUrl) URL.revokeObjectURL(it.resultUrl);
     it.result = r.blob; it.resultUrl = URL.createObjectURL(r.blob); it.w = r.w; it.h = r.h;
     it.card.out.src = it.resultUrl;
-    it.card.meta.textContent = `${r.w}×${r.h} · ${fmtKB(r.blob.size)} · ${it.ms}ms`;
+    it.card.meta.textContent = `${r.w}×${r.h} · ${fmtKB(r.blob.size)} · ${it.ms}ms` + (it.boxes ? ' · 영역 지정' : '');
   }
+
+  // ---------- 영역 지정 ----------
+  const rg = $('#rg'), rgWrap = $('#rgWrap'), rgImg = $('#rgImg');
+  let editing = null;   // 지금 편집 중인 사진
+  let boxes = [];       // 그린 사각형들. 사진 크기에 대한 0~1 비율 좌표 {x, y, w, h}
+  let drawing = null;   // 지금 그리고 있는 사각형
+
+  function addRegionButton(it) {
+    if (it.card.region) return;
+    const b = document.createElement('button'); b.className = 'btn rg-open'; b.type = 'button'; b.textContent = '영역 지정';
+    b.addEventListener('click', () => openEditor(it));
+    it.card.acts.insertBefore(b, it.card.save);
+    it.card.region = b;
+  }
+
+  function openEditor(it) {
+    editing = it;
+    boxes = (it.boxes || []).map(b => ({ ...b }));   // 전에 그린 사각형이 있으면 다시 보여 주기
+    rgImg.src = it.card.orig.src;
+    $('#rgReset').disabled = !it.boxes;
+    rg.hidden = false; document.body.style.overflow = 'hidden';
+    renderBoxes();
+  }
+
+  function closeEditor() {
+    rg.hidden = true; document.body.style.overflow = '';
+    editing = null; drawing = null; boxes = [];
+    rgImg.removeAttribute('src');
+  }
+
+  function renderBoxes() {
+    rgWrap.querySelectorAll('.rg-box').forEach(el => el.remove());
+    const list = drawing ? [...boxes, drawing] : boxes;
+    list.forEach((b, i) => {
+      const el = document.createElement('div'); el.className = 'rg-box';
+      el.style.left = b.x * 100 + '%'; el.style.top = b.y * 100 + '%';
+      el.style.width = b.w * 100 + '%'; el.style.height = b.h * 100 + '%';
+      if (b !== drawing) {
+        const del = document.createElement('button'); del.className = 'rg-del'; del.type = 'button';
+        del.textContent = '×'; del.setAttribute('aria-label', `사각형 ${i + 1} 지우기`);
+        del.addEventListener('pointerdown', e => e.stopPropagation());   // 지우기 버튼을 누를 때 새 사각형이 그려지지 않게
+        del.addEventListener('click', () => { boxes.splice(i, 1); renderBoxes(); });
+        el.append(del);
+      }
+      rgWrap.append(el);
+    });
+    $('#rgCount').textContent = `사각형 ${boxes.length}개`;
+    $('#rgApply').disabled = boxes.length === 0;
+  }
+
+  // 화면 좌표(clientX, clientY) → 사진 안의 0~1 비율 좌표
+  function toImage(e) {
+    const r = rgImg.getBoundingClientRect();
+    const clamp = v => Math.min(1, Math.max(0, v));   // 사진 밖으로 나가면 경계에 맞춤
+    return { x: clamp((e.clientX - r.left) / r.width), y: clamp((e.clientY - r.top) / r.height) };
+  }
+
+  // 마우스와 터치를 Pointer Events 하나로 처리
+  rgWrap.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;   // 왼쪽 버튼만
+    e.preventDefault();
+    rgWrap.setPointerCapture(e.pointerId);   // 손가락이 사진 밖으로 나가도 계속 이벤트 받기
+    const p = toImage(e);
+    drawing = { x0: p.x, y0: p.y, x: p.x, y: p.y, w: 0, h: 0 };
+  });
+  rgWrap.addEventListener('pointermove', e => {
+    if (!drawing) return;
+    const p = toImage(e);
+    drawing.x = Math.min(drawing.x0, p.x); drawing.y = Math.min(drawing.y0, p.y);
+    drawing.w = Math.abs(p.x - drawing.x0); drawing.h = Math.abs(p.y - drawing.y0);
+    renderBoxes();
+  });
+  rgWrap.addEventListener('pointerup', () => {
+    if (!drawing) return;
+    const r = rgImg.getBoundingClientRect();
+    // 한 변이 화면에서 20px보다 작으면 실수로 보고 버림
+    if (drawing.w * r.width >= 20 && drawing.h * r.height >= 20) {
+      boxes.push({ x: drawing.x, y: drawing.y, w: drawing.w, h: drawing.h });
+    }
+    drawing = null; renderBoxes();
+  });
+  rgWrap.addEventListener('pointercancel', () => { drawing = null; renderBoxes(); });
+
+  $('#rgClear').addEventListener('click', () => { boxes = []; renderBoxes(); });
+  $('#rgCancel').addEventListener('click', closeEditor);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !rg.hidden) closeEditor(); });
+  $('#rgReset').addEventListener('click', () => {
+    const it = editing; if (!it || !it.auto) return;
+    it.full = it.auto.full; it.cropped = it.auto.cropped; it.ms = it.auto.ms; it.boxes = null;
+    showResult(it); closeEditor(); toast('자동 결과로 되돌렸어요');
+  });
+  $('#rgApply').addEventListener('click', async () => {
+    const it = editing; if (!it || !boxes.length) return;
+    const btns = rg.querySelectorAll('button'); btns.forEach(b => b.disabled = true);
+    $('#rgApply').textContent = '오리는 중…';
+    try {
+      const t0 = performance.now();
+      const m = await getModel(it.model);
+      const bmp = await decodeImage(it.file);
+      const { W, H } = fitSize(bmp);
+      // 0~1 비율 좌표 → 원본 이미지 픽셀 좌표
+      const px = boxes.map(b => ({ x: b.x * bmp.width, y: b.y * bmp.height, w: b.w * bmp.width, h: b.h * bmp.height }));
+      const mask = await regionMask(m, bmp, px, W, H);
+      await composeResult(it, bmp, mask, W, H);
+      bmp.close && bmp.close(); mask.width = mask.height = 0;
+      it.ms = Math.round(performance.now() - t0);
+      it.boxes = boxes.map(b => ({ ...b }));
+      showResult(it); closeEditor();
+      toast(`사각형 ${it.boxes.length}개로 다시 오렸어요`);
+    } catch (e) {
+      console.error(e);
+      toast('다시 오리지 못했어요: ' + ((e && e.message) || e));
+    } finally {
+      btns.forEach(b => b.disabled = false);
+      $('#rgApply').textContent = '적용';
+      if (!rg.hidden) { renderBoxes(); $('#rgReset').disabled = !(editing && editing.boxes); }
+    }
+  });
 
   // createImageBitmap이 못 여는 형식(아이폰 HEIC 등)은 <img>로 디코딩해서 다시 시도
   async function decodeImage(file) {
