@@ -91,7 +91,10 @@ python3 -m http.server 8000
 
 ```
 img_background_remover/
-├── index.html          # 앱 전체 (HTML + CSS + JS + 추론 엔진이 한 파일에)
+├── index.html          # 화면 구조
+├── style.css           # 디자인 (커팅 매트, 다크 모드, 휴대폰 대응)
+├── app.js              # 사진 올리기, 배경 제거 처리, 영역 지정, 저장
+├── engine.js           # 추론 엔진: 연산 목록을 TensorFlow.js로 실행 (앱과 tools/test.js가 같은 파일을 씀)
 ├── models/
 │   ├── u2netp.json     # 빠름 모델의 연산 목록
 │   ├── u2netp.0.wasm   # 빠름 모델 가중치 (float32)
@@ -102,11 +105,10 @@ img_background_remover/
 │   ├── convert.py      # ONNX → models/*.json + 가중치
 │   ├── ref.py          # 원본 ONNX를 numpy로 그대로 실행 (정답 기준)
 │   ├── simp.py         # 변환된 그래프를 numpy로 실행
-│   ├── engine.js       # index.html에 들어 있는 추론 엔진 원본
 │   ├── mocktf.js       # 테스트용 가짜 TensorFlow.js (순수 JS 구현)
-│   ├── test.js         # engine.js를 Node에서 실행
+│   ├── test.js         # ../engine.js를 Node에서 실행
 │   └── verify.py       # 위 결과들을 서로 비교
-└── docs/               # README용 예시 이미지
+└── docs/               # 예시 이미지 (README와 앱의 예시 카드에서 같이 씀)
 ```
 
 ## 모델 다시 변환하기 (선택)

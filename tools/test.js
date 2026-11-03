@@ -1,4 +1,4 @@
-const fs=require('fs');const tf=require('./mocktf');const {buildModel}=require('./engine');
+const fs=require('fs');const tf=require('./mocktf');const {buildModel}=require('../engine');
 const name=process.argv[2];const spec=JSON.parse(fs.readFileSync(`../models/${name}.json`));
 const parts=spec.parts.map(p=>fs.readFileSync('../models/'+p));const all=Buffer.concat(parts);const buf=all.buffer.slice(all.byteOffset,all.byteOffset+all.length);
 const m=buildModel(tf,spec,buf);
